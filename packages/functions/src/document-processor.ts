@@ -11,17 +11,6 @@ const s3Client = new S3Client({});
 // Inicializar cliente de Anthropic (lazy para acceder a Resource)
 let anthropicClient: Anthropic | null = null;
 
-const promptForDocumentType = (documentType: string) => {
-  switch (documentType) {
-    case "prescription":
-      return prescriptionPrompt;
-    case "exam_report":
-      return examPrompt;
-    case "consultation_summary":
-      return consultationPrompt;
-  }
-};
-
 function getAnthropicClient() {
   if (!anthropicClient) {
     anthropicClient = new Anthropic({
@@ -161,21 +150,16 @@ export const handler = async (event: any) => {
         where: {
           storageKey: key,
         },
+        include: {
+          exam: true,
+          medicationPlan: true,
+          clinicalDocuments: true,
+        },
       });
       if (!attachment) {
         console.log(`Attachment does not exists: ${key}`);
         return;
       }
-      const clinicalDocument = await prisma.clinicalDocument.findFirst({
-        where: {
-          attachmentId: attachment?.id,
-        },
-      });
-      if (!clinicalDocument) {
-        console.log(`Clinical document does not exists: ${key}`);
-        return;
-      }
-      const patientId = clinicalDocument.patientId;
 
       const command = new GetObjectCommand({
         Bucket: bucket,
@@ -199,49 +183,57 @@ export const handler = async (event: any) => {
 
       if (!mimeType) return;
 
-      const prompt = promptForDocumentType(documentType);
-
-      if (!prompt) {
-        console.log(`⚠️ Skipping file with unknown type: ${key}`);
-        return;
-      }
-      const data = await extractData(documentBody, mimeType, prompt);
-
-      console.log("Extracted data:", JSON.stringify(data, null, 2));
       const table =
         documentType === "prescription" ? "medicationPlan" : documentType;
       console.log("WTF", table);
       if (documentType === "exam_report") {
-        await prisma.exam.create({
+        const data = await extractData(documentBody, mimeType, examPrompt);
+        const examDate = data.examDate
+          ? new Date(data.examDate).toISOString()
+          : undefined;
+        const reportDate = data.reportDate
+          ? new Date(data.reportDate).toISOString()
+          : undefined;
+
+        console.log("Extracted data:", JSON.stringify(data, null, 2));
+
+        await prisma.exam.update({
+          where: {
+            id: attachment.exam?.id,
+          },
           data: {
             ...(data as ExamData),
-            patient: {
-              connect: {
-                id: patientId,
-              },
-            },
+            examDate,
+            reportDate,
+            source: "WEB_UPLOAD",
           },
         });
       } else if (documentType === "prescription") {
-        await prisma.medicationPlan.create({
+        const data = await extractData(
+          documentBody,
+          mimeType,
+          prescriptionPrompt
+        );
+        await prisma.medicationPlan.update({
+          where: {
+            id: attachment.medicationPlan?.id,
+          },
           data: {
             ...(data as PrescriptionData),
-            patient: {
-              connect: {
-                id: patientId,
-              },
-            },
           },
         });
-      } else if (documentType === "consultation") {
-        await prisma.consultation.create({
+      } else if (documentType === "consultation_summary") {
+        const data = await extractData(
+          documentBody,
+          mimeType,
+          consultationPrompt
+        );
+        await prisma.clinicalDocument.update({
+          where: {
+            id: attachment.clinicalDocuments[0]?.consultationId,
+          },
           data: {
             ...(data as ConsultationData),
-            patient: {
-              connect: {
-                id: patientId,
-              },
-            },
           },
         });
       }

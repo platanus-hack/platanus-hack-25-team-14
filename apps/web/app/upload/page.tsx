@@ -105,9 +105,11 @@ export default function Page() {
   // Mapear la categoría del formulario al DocumentType del modelo clínico
   const mapCategoryToDocType = (cat: DocumentCategory): string => {
     switch (cat) {
-      case "exam":
+      case "exam": return "EXAM_REPORT"
       case "lab-result":
+        return "EXAM_REPORT"
       case "imaging":
+        return "EXAM_REPORT"
       case "vaccination":
         return "EXAM_REPORT";
       case "prescription":
@@ -115,7 +117,7 @@ export default function Page() {
       case "appointment":
         return "CONSULTATION_SUMMARY";
       default:
-        return "OTHER";
+        return "EXAM_REPORT";
     }
   };
 
