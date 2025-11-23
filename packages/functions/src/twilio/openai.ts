@@ -1,10 +1,5 @@
 import OpenAI from "openai";
-import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { Resource } from "sst";
-import type { Conversation, UploadIntent } from "@prisma/client";
-import { buildConversationHistory } from "./conversationHistory";
-import { AGENT_TOOLS, handleAgentToolCall } from "./agentTools";
-import { prisma } from "@medical-platform/core";
 
 const openai = new OpenAI({
   apiKey: Resource.OpenAIApiKey?.value || process.env.OPENAI_API_KEY,
@@ -14,7 +9,7 @@ export type ConversationMessage = {
   role: "system" | "user" | "assistant";
   content: string;
 };
-console.log(Resource.OpenAIApiKey?.value);
+
 export type AgentResponse = {
   message: string; // Lo que el agente debe responder al usuario
   extractedData: {
@@ -103,8 +98,9 @@ TU PROPÓSITO es:
 
 Para completar una subida, necesitas recolectar:
 1. **Tipo de documento**: examen, cirugía, receta, certificado médico, consulta, etc.
-2. **Título descriptivo**: un nombre corto para identificar el documento (ej: "Resonancia rodilla derecha")
-3. **Archivo**: el paciente debe enviar la foto o PDF del documento
+2. **Fecha**: cuándo se realizó el examen/procedimiento (puede ser aproximada: "la semana pasada", "15 de noviembre", etc.)
+3. **Título descriptivo**: un nombre corto para identificar el documento (ej: "Resonancia rodilla derecha")
+4. **Archivo**: el paciente debe enviar la foto o PDF del documento
 
 CÓMO DEBES COMPORTARTE:
 
@@ -209,197 +205,100 @@ export async function transcribeAudio(
   }
 }
 
-export type MedicalAgentTurnResult = {
-  agentResponse: AgentResponse;
-  openAiResponseId?: string;
-  openAiConversationId?: string;
-  previousResponseId?: string;
-  requestedToolCalls?: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[];
-  submittedToolOutputs?: Array<{ tool_call_id: string; output: string }>;
-  errorMessage?: string;
-};
-
 /**
- * Ejecuta un turno conversacional usando la Responses API con Conversations
- * IMPORTANTE: Por ahora usamos previous_response_id en lugar de conversation ID
- * para simplificar el manejo de herramientas personalizadas
+ * Genera una respuesta conversacional completa y extrae información si está presente
  */
-export async function runMedicalAgentTurn({
-  conversation,
-  intent,
-  currentMessage,
-  currentState,
-}: {
-  conversation: Conversation;
-  intent: UploadIntent;
-  currentMessage: string;
+export async function generateConversationalResponse(
+  conversationHistory: ConversationMessage[],
+  currentMessage: string,
   currentState: {
     documentType?: string | null;
     documentDateText?: string | null;
     documentTitle?: string | null;
     hasDocument: boolean;
-  };
-}): Promise<MedicalAgentTurnResult> {
+  }
+): Promise<AgentResponse> {
+  // Preparar el contexto del estado actual
+  const stateContext = buildStateContext(currentState);
+
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    {
+      role: "system",
+      content: SYSTEM_PROMPT,
+    },
+    {
+      role: "system",
+      content: `ESTADO ACTUAL DE LA INFORMACIÓN:
+${stateContext}
+
+INSTRUCCIONES PARA TU RESPUESTA:
+1. Lee el mensaje del usuario
+2. Si proporciona información nueva (tipo, fecha, título), extráela
+3. Genera una respuesta natural y conversacional
+4. Si el usuario hace preguntas fuera de tu alcance, redirige amablemente
+5. Si ya tienes toda la información necesaria, confirma y pide el archivo (si falta) o indica que estás procesando
+
+Responde en el siguiente formato JSON (sin markdown):
+{
+  "message": "tu respuesta conversacional al usuario",
+  "extractedData": {
+    "documentType": "tipo si lo mencionó o null",
+    "documentDateText": "fecha si la mencionó o null",
+    "documentTitle": "título si lo mencionó o null"
+  },
+  "isComplete": boolean (true si tenemos tipo, fecha, título Y archivo),
+  "shouldProceed": boolean (false si el usuario está preguntando algo fuera de alcance)
+}`,
+    },
+    ...conversationHistory,
+    {
+      role: "user",
+      content: currentMessage,
+    },
+  ];
+
   try {
-    // Build system instructions with current state
-    const systemInstructions = `${SYSTEM_PROMPT}
-
-${buildRunInstructions(currentState)}`;
-
-    // Prepare input (current user message)
-    const inputItems = [
-      {
-        role: "user" as const,
-        content: currentMessage,
-      },
-    ];
-
-    console.log("📞 Calling Responses API...");
-
-    // Build request parameters
-    const requestParams: any = {
+    const completion = await openai.chat.completions.create({
       model: "gpt-4o",
-
-      // Current user input
-      input: inputItems,
-
-      // System instructions (can be updated per turn)
-      instructions: systemInstructions,
-
-      // Available tools
-      tools: AGENT_TOOLS.map((tool) => ({
-        type: "function" as const,
-        function: {
-          name: tool.function.name,
-          description: tool.function.description,
-          parameters: tool.function.parameters,
-        },
-      })),
-      tool_choice: "auto",
-
-      // Configuration
-      temperature: 0.8,
-      store: true, // Store for tracking and debugging
-
-      // Useful metadata
-      metadata: {
-        intentId: intent.id,
-        patientId: conversation.patientId || "unknown",
-        conversationId: conversation.id,
-      },
-
-      // Format response as JSON for the final message
-      text: {
-        format: {
-          type: "json_object" as const,
-        },
-      },
-    };
-
-    // Use previous_response_id to chain conversations if available
-    if (conversation.lastOpenAiResponseId) {
-      requestParams.previous_response_id = conversation.lastOpenAiResponseId;
-      console.log(
-        "🔗 Chaining from previous response:",
-        conversation.lastOpenAiResponseId
-      );
-    }
-
-    // Call OpenAI Responses API
-    const response = await openai.responses.create(requestParams);
-
-    console.log(
-      "✅ Response received:",
-      response.id,
-      "Status:",
-      response.status
-    );
-
-    // Check if tools were called and need handling
-    const functionCalls = response.output.filter(
-      (item: any) => item.type === "function_call"
-    );
-
-    if (functionCalls.length > 0) {
-      console.log("🔧 Function calls detected:", functionCalls.length);
-
-      // Execute function calls
-      for (const funcCall of functionCalls) {
-        const fc = funcCall as any;
-        const args = JSON.parse(fc.arguments || "{}");
-
-        // Inject context
-        if (
-          fc.name === "lookup_latest_exam" ||
-          fc.name === "lookup_clinical_history"
-        ) {
-          args.patientId = args.patientId ?? conversation.patientId;
-        }
-        if (fc.name === "store_upload_intent") {
-          args.uploadIntentId = args.uploadIntentId ?? intent.id;
-        }
-
-        console.log(`🔧 Executing function: ${fc.name}`, args);
-        await handleAgentToolCall(fc.name, args);
-      }
-    }
-
-    // Update last response ID for tracking
-    await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: {
-        lastOpenAiResponseId: response.id,
-      },
+      messages,
+      temperature: 0.8, // Más creatividad para conversación natural
+      max_tokens: 400,
     });
 
-    // Extract assistant message from output
-    const assistantMessage = response.output.find(
-      (item: any) => item.type === "message" && item.role === "assistant"
-    );
-
-    if (!assistantMessage) {
-      throw new Error("No assistant message in response");
+    const responseText = completion.choices[0]?.message?.content?.trim();
+    if (!responseText) {
+      throw new Error("Empty response from OpenAI");
     }
 
-    // Extract text content
-    const msg = assistantMessage as any;
-    const textContent = msg.content?.find?.(
-      (c: any) => c.type === "output_text"
-    );
+    // Parse JSON response
+    const cleanedResponse = responseText
+      .replace(/```json\n?/g, "")
+      .replace(/```\n?/g, "")
+      .trim();
 
-    if (!textContent?.text) {
-      throw new Error("No text content in assistant message");
-    }
-
-    const responseText = textContent.text;
-    console.log(
-      "📝 Assistant response:",
-      responseText.substring(0, 100) + "..."
-    );
-
-    // Parse agent response
-    const agentResponse = parseAgentResponse(responseText, currentState);
-
-    return {
-      agentResponse,
-      openAiResponseId: response.id,
-      previousResponseId: conversation.lastOpenAiResponseId ?? undefined,
-    };
+    const result = JSON.parse(cleanedResponse) as AgentResponse;
+    return result;
   } catch (error) {
-    console.error("❌ Error in runMedicalAgentTurn:", error);
+    console.error("Error generating conversational response:", error);
 
-    // Log the full error for debugging
-    if (error instanceof Error) {
-      console.error("Error details:", {
-        message: error.message,
-        stack: error.stack,
-        cause: (error as any).cause,
-      });
+    // Fallback: respuesta genérica
+    const missingFields = getMissingFields(currentState);
+
+    let fallbackMessage = "";
+    if (missingFields.length === 0 && currentState.hasDocument) {
+      fallbackMessage = "Perfecto! Estoy procesando tu documento.";
+    } else if (missingFields.length === 4) {
+      fallbackMessage =
+        "Hola! Puedo ayudarte a subir exámenes, informes de enfermedad, recetas o certificados, o contarte lo que dice tu último examen o tu historial. ¿Qué necesitas hacer?";
+    } else {
+      fallbackMessage = `Para continuar necesito: ${missingFields.join(", ")}.`;
     }
 
     return {
-      agentResponse: buildFallbackAgentResponse(currentState),
-      errorMessage: error instanceof Error ? error.message : "Unknown error",
+      message: fallbackMessage,
+      extractedData: {},
+      isComplete: missingFields.length === 0 && currentState.hasDocument,
+      shouldProceed: true,
     };
   }
 }
@@ -416,6 +315,12 @@ function buildStateContext(currentState: {
     parts.push(`✓ Tipo: ${currentState.documentType}`);
   } else {
     parts.push(`✗ Tipo: NO TENEMOS`);
+  }
+
+  if (currentState.documentDateText) {
+    parts.push(`✓ Fecha: ${currentState.documentDateText}`);
+  } else {
+    parts.push(`✗ Fecha: NO TENEMOS`);
   }
 
   if (currentState.documentTitle) {
@@ -442,108 +347,11 @@ function getMissingFields(currentState: {
   const missing: string[] = [];
 
   if (!currentState.documentType) missing.push("tipo de documento");
+  if (!currentState.documentDateText) missing.push("fecha");
   if (!currentState.documentTitle) missing.push("título");
   if (!currentState.hasDocument) missing.push("el archivo");
 
   return missing;
-}
-
-/**
- * Parse the agent's JSON response
- */
-function parseAgentResponse(
-  responseText: string,
-  currentState: {
-    documentType?: string | null;
-    documentDateText?: string | null;
-    documentTitle?: string | null;
-    hasDocument: boolean;
-  }
-): AgentResponse {
-  try {
-    const cleaned = responseText
-      .replace(/```json\n?/g, "")
-      .replace(/```\n?/g, "")
-      .trim();
-
-    const parsed = JSON.parse(cleaned) as AgentResponse;
-
-    // Validate the response structure
-    if (!parsed.message) {
-      throw new Error("Missing message field");
-    }
-
-    return {
-      message: parsed.message,
-      extractedData: parsed.extractedData || {},
-      isComplete: parsed.isComplete ?? false,
-      shouldProceed: parsed.shouldProceed ?? true,
-    };
-  } catch (error) {
-    console.error("Failed to parse agent response:", error, responseText);
-    return buildFallbackAgentResponse(currentState);
-  }
-}
-
-function buildRunInstructions(currentState: {
-  documentType?: string | null;
-  documentDateText?: string | null;
-  documentTitle?: string | null;
-  hasDocument: boolean;
-}): string {
-  const stateContext = buildStateContext(currentState);
-  return `ESTADO ACTUAL DE LA INFORMACIÓN:
-${stateContext}
-
-INSTRUCCIONES PARA TU RESPUESTA:
-1. Lee el mensaje del usuario.
-2. Si proporciona información nueva (tipo, título), extráela y actualiza el intent mediante la herramienta store_upload_intent SOLO cuando tengas todos los campos.
-3. Si el usuario pregunta por su historial o exámenes, usa las herramientas lookup_latest_exam o lookup_clinical_history.
-4. Genera una respuesta natural y conversacional (máx 2-3 oraciones).
-5. Si el usuario hace preguntas fuera de tu alcance, redirige amablemente.
-6. Si ya tienes toda la información necesaria (tipo, título Y archivo), llama a store_upload_intent para procesar el documento.
-
-FORMATO DE RESPUESTA:
-Debes responder SIEMPRE en formato JSON con la siguiente estructura:
-{
-  "message": "Tu respuesta conversacional al usuario",
-  "extractedData": {
-    "documentType": "tipo de documento si fue mencionado o null",
-    "documentTitle": "título del documento si fue mencionado o null"
-  },
-  "isComplete": true o false (true si tenemos tipo, título Y archivo),
-  "shouldProceed": true o false (false si el usuario se desvió del tema)
-}`;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function buildFallbackAgentResponse(currentState: {
-  documentType?: string | null;
-  documentDateText?: string | null;
-  documentTitle?: string | null;
-  hasDocument: boolean;
-}): AgentResponse {
-  const missingFields = getMissingFields(currentState);
-
-  let fallbackMessage = "";
-  if (missingFields.length === 0 && currentState.hasDocument) {
-    fallbackMessage = "Perfecto! Estoy procesando tu documento.";
-  } else if (missingFields.length === 4) {
-    fallbackMessage =
-      "Hola! Puedo ayudarte a subir exámenes, informes de enfermedad, recetas o certificados, o contarte lo que dice tu último examen o tu historial. ¿Qué necesitas hacer?";
-  } else {
-    fallbackMessage = `Para continuar necesito: ${missingFields.join(", ")}.`;
-  }
-
-  return {
-    message: fallbackMessage,
-    extractedData: {},
-    isComplete: missingFields.length === 0 && currentState.hasDocument,
-    shouldProceed: true,
-  };
 }
 
 export async function classifyMedicalQuery(input: {
