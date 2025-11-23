@@ -1,0 +1,639 @@
+// packages/core/prisma/schema.prisma
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native"]
+}
+
+enum Sex {
+  FEMALE
+  MALE
+  OTHER
+  UNKNOWN
+}
+
+enum BloodType {
+  A_POS
+  A_NEG
+  B_POS
+  B_NEG
+  AB_POS
+  AB_NEG
+  O_POS
+  O_NEG
+  UNKNOWN
+}
+
+enum ExamCategory {
+  LAB
+  IMAGING
+  CLINICAL
+  OTHER
+}
+
+enum ExamSource {
+  WHATSAPP_UPLOAD
+  WEB_UPLOAD
+  MANUAL_ENTRY
+  INTEGRATION
+}
+
+enum ResultInterpretation {
+  NORMAL
+  HIGH
+  LOW
+  ABNORMAL
+  BORDERLINE
+  UNKNOWN
+}
+
+enum RelationType {
+  MOTHER
+  FATHER
+  SIBLING
+  GRANDPARENT
+  CHILD
+  OTHER
+}
+
+enum ConditionStatus {
+  ACTIVE
+  RESOLVED
+  REMISSION
+}
+
+enum ShareLinkPurpose {
+  GENERAL
+  EMERGENCY
+}
+
+enum DocumentType {
+  CONSULTATION_SUMMARY
+  EXAM_REPORT
+  PRESCRIPTION
+  MEDICAL_CERTIFICATE
+  OTHER
+}
+
+enum ConversationProvider {
+  TWILIO_WHATSAPP
+}
+
+enum ConversationStatus {
+  ACTIVE
+  HANDOFF
+  CLOSED
+}
+
+enum AgentRunStatus {
+  IN_PROGRESS
+  REQUIRES_ACTION
+  COMPLETED
+  FAILED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum UploadIntentStatus {
+  COLLECTING
+  READY
+  DISPATCHED
+  FAILED
+}
+
+enum IntakeField {
+  DOCUMENT_TYPE
+  DOCUMENT_DATE
+  DOCUMENT_TITLE
+  DOCUMENT_FILE
+}
+
+model Patient {
+  id          String     @id @default(cuid())
+  fullName    String
+  documentId  String?    @unique // RUT / DNI
+  email       String?    @unique
+  phone       String?    @unique // ideal para WhatsApp
+  sex         Sex?
+  dateOfBirth DateTime?
+  bloodType   BloodType? @default(UNKNOWN)
+
+  // Relación 1:1 opcional con User
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId String? @unique
+
+  // Info de emergencia
+  emergencyNotes        String? // texto libre: "alergia a penicilina, asmática, etc."
+  emergencyContactName  String?
+  emergencyContactPhone String?
+
+  // Historial antropométrico
+  anthropometrics AnthropometricRecord[]
+
+  // Bloques de historial
+  consultations   Consultation[]
+  exams           Exam[]
+  surgeries       Surgery[]
+  vaccines        VaccineRecord[]
+  allergies       Allergy[]
+  conditions      Condition[] // enfermedades crónicas / antecedentes personales
+  familyHistory   FamilyHistory[]
+  medicationPlans MedicationPlan[]
+  shareLinks      ShareLink[]
+  conversations   Conversation[]
+  uploadIntents   UploadIntent[]
+
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  clinicalDocuments ClinicalDocument[]
+}
+
+model AnthropometricRecord {
+  id String @id @default(cuid())
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId String
+
+  date     DateTime @default(now())
+  heightCm Float? // normalmente no cambia tanto, pero queda histórico
+  weightKg Float?
+  bmi      Float? // opcional (se puede calcular on the fly)
+
+  notes String?
+
+  @@index([patientId, date])
+}
+
+model Consultation {
+  id String @id @default(cuid())
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId String
+
+  date         DateTime @default(now())
+  facilityName String? // "Clínica Bupa", etc.
+  doctorName   String?
+  specialty    String?
+
+  reason String? // motivo de consulta
+  notes  String? // notas generales / resumen
+
+  diagnoses     Diagnosis[]
+  prescriptions MedicationPlan[] // recetas asociadas a esta consulta
+  documents     ClinicalDocument[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId, date])
+}
+
+model Diagnosis {
+  id String @id @default(cuid())
+
+  consultation   Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  consultationId String
+
+  code        String? // ICD-10 u otro
+  description String // "Gripe", "Hipertensión arterial", etc.
+  isPrimary   Boolean @default(false)
+  isChronic   Boolean @default(false)
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([consultationId])
+}
+
+model ClinicalDocument {
+  id String @id @default(cuid())
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId String
+
+  consultation   Consultation? @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  consultationId String?
+
+  docType   DocumentType
+  title     String?
+  rawText   String? // salida de OCR / IA
+  ocrStatus String? // "PENDING", "DONE", "FAILED"
+
+  // Archivo en storage
+  attachment   Attachment? @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  attachmentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId])
+  @@index([consultationId])
+}
+
+model Exam {
+  id String @id @default(cuid())
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId String
+
+  title      String // "Hemograma completo"
+  category   ExamCategory
+  examDate   DateTime?
+  reportDate DateTime?
+
+  labName        String?
+  orderingDoctor String?
+  specialty      String?
+
+  source ExamSource @default(WHATSAPP_UPLOAD)
+
+  results     ExamResult[]
+  attachments Attachment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId])
+  @@index([examDate])
+  @@index([source])
+}
+
+model ExamResult {
+  id String @id @default(cuid())
+
+  exam   Exam   @relation(fields: [examId], references: [id], onDelete: Cascade)
+  examId String
+
+  name         String
+  valueNumeric Float?
+  valueText    String?
+  unit         String?
+
+  referenceMin   Float?
+  referenceMax   Float?
+  referenceRange String?
+
+  interpretation ResultInterpretation @default(UNKNOWN)
+  isFlagged      Boolean              @default(false)
+  comment        String?
+  orderIndex     Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([examId])
+  @@index([name])
+  @@index([isFlagged])
+}
+
+model Surgery {
+  id String @id @default(cuid())
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId String
+
+  name       String // "Apendicectomía", "Cesárea", etc.
+  date       DateTime?
+  hospital   String?
+  doctorName String?
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId, date])
+}
+
+model VaccineRecord {
+  id String @id @default(cuid())
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId String
+
+  vaccineName       String // "Hepatitis B", "COVID-19 Pfizer", etc.
+  doseNumber        Int? // 1, 2, 3...
+  totalDosesPlanned Int?
+  date              DateTime?
+  lotNumber         String?
+  facility          String?
+  notes             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId, vaccineName])
+}
+
+model Allergy {
+  id String @id @default(cuid())
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId String
+
+  substance    String // "Penicilina", "Mariscos", "Pólen", etc.
+  reaction     String? // "Anafilaxia", "Urticaria", etc.
+  isMedication Boolean @default(false)
+  isSevere     Boolean @default(false)
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId, substance])
+}
+
+model Condition {
+  id String @id @default(cuid())
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId String
+
+  name        String // "Hipertensión", "Diabetes tipo 2", "Asma"
+  status      ConditionStatus @default(ACTIVE)
+  diagnosedAt DateTime?
+  resolvedAt  DateTime?
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId, status])
+}
+
+model FamilyHistory {
+  id String @id @default(cuid())
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId String
+
+  relation       RelationType
+  conditionName  String // "Infarto agudo al miocardio", "Cáncer de mama"
+  ageAtDiagnosis Int?
+  notes          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId, relation])
+}
+
+model MedicationPlan {
+  id String @id @default(cuid())
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId String
+
+  consultation   Consultation? @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  consultationId String?
+
+  drugName  String // "Sertralina 50 mg", "Samexid 20 mg", etc.
+  dose      String? // "1 comprimido", "10 gotas"
+  frequency String? // "cada 8 horas", "1 vez al día"
+  route     String? // "VO", "IM", etc.
+
+  startDate DateTime?
+  endDate   DateTime?
+
+  isActive Boolean @default(true)
+  notes    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Archivos asociados a este plan (recetas, indicaciones, etc.)
+  attachments Attachment[]
+
+  @@index([patientId, isActive])
+}
+
+model Attachment {
+  id String @id @default(cuid())
+
+  // Cada archivo puede asociarse opcionalmente a un examen o a un plan de medicación.
+  exam             Exam?           @relation(fields: [examId], references: [id], onDelete: SetNull)
+  examId           String?
+  medicationPlan   MedicationPlan? @relation(fields: [medicationPlanId], references: [id], onDelete: SetNull)
+  medicationPlanId String?
+
+  storageKey        String // key en S3 / storage
+  fileName          String?
+  mimeType          String?
+  sizeBytes         Int?
+  presingedUrl      String?
+  uploadedAt        DateTime           @default(now())
+  sourceUrl         String?
+  source            String? // "whatsapp", "web", etc.
+  clinicalDocuments ClinicalDocument[]
+
+  @@index([examId])
+  @@index([medicationPlanId])
+}
+
+model ShareLink {
+  id String @id @default(cuid())
+
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId String
+
+  token   String           @unique // hash para URL pública
+  purpose ShareLinkPurpose @default(GENERAL)
+
+  // Configuración de qué incluir
+  includeBasicInfo       Boolean @default(true) // nombre, fecha nacimiento, tipo de sangre
+  includeEmergencyInfo   Boolean @default(true) // emergencias, alergias severas, etc.
+  includeConsultations   Boolean @default(false)
+  includeDiagnoses       Boolean @default(false)
+  includeExams           Boolean @default(false)
+  includeSurgeries       Boolean @default(false)
+  includeVaccines        Boolean @default(false)
+  includeFamilyHistory   Boolean @default(false)
+  includeAllergies       Boolean @default(false)
+  includeConditions      Boolean @default(false)
+  includeMedications     Boolean @default(false)
+  includeAnthropometrics Boolean @default(false)
+
+  expiresAt DateTime?
+  revokedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([patientId])
+  @@index([token])
+}
+
+/// Authentication Models
+model User {
+  id            String    @id
+  name          String
+  email         String
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+
+  // Cada usuario puede tener a lo más un Patient asociado
+  patient Patient?
+
+  @@unique([email])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model Conversation {
+  id                     String               @id @default(cuid())
+  provider               ConversationProvider
+  providerConversationId String               @unique
+  fromPhoneNumber        String
+  toPhoneNumber          String?
+  contactName            String?
+  status                 ConversationStatus   @default(ACTIVE)
+  lastMessageAt          DateTime?
+  metadata               Json?
+  openAiConversationId   String?              @unique
+  lastOpenAiResponseId   String? // Tracking del último response para encadenar
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+
+  patient   Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  patientId String?
+
+  messages  ConversationMessage[]
+  intents   UploadIntent[]
+  agentRuns AgentRun[]
+
+  @@index([providerConversationId])
+  @@index([fromPhoneNumber])
+}
+
+model ConversationMessage {
+  id                String           @id @default(cuid())
+  providerMessageId String           @unique
+  conversation      Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId    String
+  direction         MessageDirection
+  messageType       String
+  textBody          String?
+  mediaUrl          String?
+  mediaMeta         Json?
+  rawPayload        Json
+  receivedAt        DateTime?
+  createdAt         DateTime         @default(now())
+  providerStatus    String?
+
+  @@index([conversationId, direction])
+  @@index([receivedAt])
+}
+
+model UploadIntent {
+  id                String             @id @default(cuid())
+  conversation      Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId    String
+  status            UploadIntentStatus @default(COLLECTING)
+  awaitingField     IntakeField?
+  documentType      String?
+  documentDateText  String?
+  documentTitle     String?
+  documentSourceUrl String?
+  documentMimeType  String?
+  documentFileName  String?
+  providerMediaId   String?
+  documentMessageId String?
+  metadata          Json?
+  dispatchedAt      DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  patient   Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  patientId String?
+
+  @@index([conversationId, status])
+  @@index([patientId])
+}
+
+model ConversationWebhookEvent {
+  id                String   @id @default(cuid())
+  providerMessageId String   @unique
+  eventName         String
+  createdAt         DateTime @default(now())
+}
+
+model AgentRun {
+  id                   String         @id @default(cuid())
+  conversation         Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId       String
+  openAiConversationId String
+  responseId           String?
+  status               AgentRunStatus @default(IN_PROGRESS)
+  userMessage          String?
+  lastOutput           String?
+  requestPayload       Json?
+  responsePayload      Json?
+  requestedToolCalls   Json?
+  submittedToolOutputs Json?
+  errorCode            String?
+  errorMessage         String?
+  metadata             Json?
+  completedAt          DateTime?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@index([conversationId, createdAt])
+}

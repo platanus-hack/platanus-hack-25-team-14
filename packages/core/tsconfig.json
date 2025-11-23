@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": ["src/**/*", "../../sst-env.d.ts", "../../types/pothos-generated.d.ts"]
+}
+

@@ -1,0 +1,190 @@
+type Allergy {
+  id: ID!
+  isMedication: Boolean!
+  isSevere: Boolean!
+  notes: String
+  reaction: String
+  substance: String!
+}
+
+type AnthropometricRecord {
+  bmi: Float
+  date: DateTime!
+  heightCm: Float
+  id: ID!
+  notes: String
+  weightKg: Float
+}
+
+enum BloodType {
+  AB_NEG
+  AB_POS
+  A_NEG
+  A_POS
+  B_NEG
+  B_POS
+  O_NEG
+  O_POS
+  UNKNOWN
+}
+
+type Condition {
+  diagnosedAt: DateTime
+  id: ID!
+  name: String!
+  notes: String
+  resolvedAt: DateTime
+  status: String!
+}
+
+type Consultation {
+  date: DateTime!
+  diagnoses: [Diagnosis!]!
+  doctorName: String
+  facilityName: String
+  id: ID!
+  notes: String
+  reason: String
+  specialty: String
+}
+
+scalar DateTime
+
+type Diagnosis {
+  code: String
+  description: String!
+  id: ID!
+  isChronic: Boolean!
+  isPrimary: Boolean!
+  notes: String
+}
+
+type Exam {
+  createdAt: DateTime!
+
+  """Temporary S3 URL to download the latest attachment for this exam"""
+  downloadUrl: String!
+  fileKey: String!
+  id: ID!
+
+  """
+  Temporary S3 URL to upload/overwrite the primary attachment for this exam
+  """
+  presignedUrl: String!
+  status: String!
+  title: String!
+}
+
+type MedicationPlan {
+  dose: String
+  drugName: String!
+  endDate: DateTime
+  frequency: String
+  id: ID!
+  isActive: Boolean!
+  notes: String
+  route: String
+  startDate: DateTime
+}
+
+type Mutation {
+  createDocumentUpload(category: String, docType: String!, filename: String!, mimeType: String, title: String!, userId: String!): Exam!
+  createEmergencyShareLink(includeAllergies: Boolean, includeAnthropometrics: Boolean, includeBasicInfo: Boolean, includeConditions: Boolean, includeEmergencyInfo: Boolean, includeMedications: Boolean, patientId: String!): ShareLink!
+  createGeneralShareLink(expiresAt: DateTime, includeAllergies: Boolean, includeAnthropometrics: Boolean, includeBasicInfo: Boolean, includeConditions: Boolean, includeConsultations: Boolean, includeDiagnoses: Boolean, includeEmergencyInfo: Boolean, includeExams: Boolean, includeFamilyHistory: Boolean, includeMedications: Boolean, includeSurgeries: Boolean, includeVaccines: Boolean, patientId: String!): ShareLink!
+  upsertPatientProfile(bloodType: String, dateOfBirth: DateTime, documentId: String, email: String, emergencyContactName: String, emergencyContactPhone: String, emergencyNotes: String, fullName: String!, heightCm: Float, phone: String, sex: String, userId: String!, weightKg: Float): Patient!
+}
+
+type Patient {
+  allergies: [Allergy!]!
+  bloodType: BloodType
+  conditions: [Condition!]!
+  consultations: [Consultation!]!
+  createdAt: DateTime!
+  dateOfBirth: DateTime
+  documentId: String
+  email: String
+  emergencyContactName: String
+  emergencyContactPhone: String
+  emergencyNotes: String
+  exams: [Exam!]!
+  fullName: String!
+  id: ID!
+  latestAnthropometric: AnthropometricRecord
+  medicationPlans: [MedicationPlan!]!
+  phone: String
+  sex: Sex
+  surgeries: [Surgery!]!
+  updatedAt: DateTime!
+  vaccines: [VaccineRecord!]!
+}
+
+type Query {
+  exam(id: String!): Exam!
+  exams: [Exam!]!
+  getPatient(id: String!): Patient!
+  getPatientByUser(userId: String!): Patient
+  getPatientConsultations(patientId: String!): [Consultation!]!
+  getPatientExams(patientId: String!): [Exam!]!
+  getPatientShareLinks(patientId: String!): [ShareLink!]!
+  getPatientSurgeries(patientId: String!): [Surgery!]!
+  getPatientVaccines(patientId: String!): [VaccineRecord!]!
+  getShareLink(token: String!): ShareLink!
+}
+
+enum Sex {
+  FEMALE
+  MALE
+  OTHER
+  UNKNOWN
+}
+
+type ShareLink {
+  createdAt: DateTime!
+  expiresAt: DateTime
+  id: ID!
+  includeAllergies: Boolean!
+  includeAnthropometrics: Boolean!
+  includeBasicInfo: Boolean!
+  includeConditions: Boolean!
+  includeConsultations: Boolean!
+  includeDiagnoses: Boolean!
+  includeEmergencyInfo: Boolean!
+  includeExams: Boolean!
+  includeFamilyHistory: Boolean!
+  includeMedications: Boolean!
+  includeSurgeries: Boolean!
+  includeVaccines: Boolean!
+  patient: Patient!
+  patientId: String!
+  purpose: String!
+  revokedAt: DateTime
+  token: String!
+}
+
+type Surgery {
+  date: DateTime
+  doctorName: String
+  hospital: String
+  id: ID!
+  name: String!
+  notes: String
+}
+
+type User {
+  email: String!
+  id: ID!
+  image: String
+  name: String!
+  patient: Patient
+}
+
+type VaccineRecord {
+  date: DateTime
+  doseNumber: Int
+  facility: String
+  id: ID!
+  lotNumber: String
+  notes: String
+  totalDosesPlanned: Int
+  vaccineName: String!
+}

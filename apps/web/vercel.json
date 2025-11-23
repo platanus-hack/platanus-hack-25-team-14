@@ -1,0 +1,5 @@
+{
+  "buildCommand": "pnpm -w gen && pnpm -w gen:gql && pnpm --filter web build",
+  "installCommand": "pnpm install",
+  "framework": "nextjs"
+}
