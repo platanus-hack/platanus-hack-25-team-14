@@ -37,15 +37,22 @@ if (!secret) {
   console.error("BetterAuthSecret is required but not set");
 }
 
+const baseURL = getBaseURL();
+const trustedOrigins = [
+  baseURL,
+  process.env.NEXT_PUBLIC_API_URL,
+  "https://hackathon-rust-nine.vercel.app",
+  "http://localhost:3000",
+  ...(process.env.VERCEL_URL ? [`https://${process.env.VERCEL_URL}`] : []),
+].filter(Boolean) as string[];
+
 export const auth = betterAuth({
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
-  baseURL: getBaseURL(),
+  baseURL,
   secret: secret || "dummy-secret-for-build",
-  trustedOrigins: [getBaseURL(), process.env.NEXT_PUBLIC_API_URL].filter(
-    Boolean
-  ) as string[],
+  trustedOrigins: [...new Set(trustedOrigins)],
   emailAndPassword: {
     enabled: true,
   },
