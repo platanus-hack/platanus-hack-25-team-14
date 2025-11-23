@@ -5,10 +5,6 @@
 
 declare module "sst" {
   export interface Resource {
-    "AnthropicApiKey": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
     "BetterAuthSecret": {
       "type": "sst.sst.Secret"
       "value": string
@@ -16,11 +12,6 @@ declare module "sst" {
     "DatabaseUrl": {
       "type": "sst.sst.Secret"
       "value": string
-    }
-    "DocumentProcessor": {
-      "name": string
-      "type": "sst.aws.Function"
-      "url": string
     }
     "Exams": {
       "name": string
