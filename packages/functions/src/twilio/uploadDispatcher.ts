@@ -114,9 +114,6 @@ export async function dispatchUploadIntent(intentId: string) {
               patientId,
               category: guessExamCategory(intent.documentType),
               examDate: tryParseDate(intent.documentDateText) ?? undefined,
-              source: ExamSource.WHATSAPP_UPLOAD,
-              sourceMessageId: intent.documentMessageId ?? undefined,
-              sourceChannel: "twilio",
               attachments: {
                 create: {
                   storageKey,

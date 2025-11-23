@@ -98,7 +98,6 @@ export const AGENT_TOOLS = [
 
 /**
  * Tool handlers - ejecutan la lógica cuando el Agent llama una tool
- * Compatible con Responses API y Chat Completions API
  */
 export async function handleAgentToolCall(
   toolName: string,
@@ -134,45 +133,13 @@ export async function handleAgentToolCall(
   }
 }
 
-/**
- * Utility: Inject context into tool arguments for Responses API
- * This ensures patientId and uploadIntentId are available to tools
- */
-export function injectToolContext(
-  args: Record<string, unknown>,
-  toolName: string,
-  context: {
-    patientId?: string | null;
-    uploadIntentId?: string;
-  }
-): Record<string, unknown> {
-  const enrichedArgs = { ...args };
-
-  // Inject patientId for medical lookup tools
-  if (
-    (toolName === "lookup_latest_exam" ||
-      toolName === "lookup_clinical_history") &&
-    context.patientId
-  ) {
-    enrichedArgs.patientId = enrichedArgs.patientId ?? context.patientId;
-  }
-
-  // Inject uploadIntentId for storage tool
-  if (toolName === "store_upload_intent" && context.uploadIntentId) {
-    enrichedArgs.uploadIntentId =
-      enrichedArgs.uploadIntentId ?? context.uploadIntentId;
-  }
-
-  return enrichedArgs;
-}
-
 async function lookupLatestExam(patientId: string): Promise<string> {
   const [patient, exam] = await Promise.all([
     prisma.patient.findUnique({
       where: { id: patientId },
       select: { fullName: true },
     }),
-    prisma.exam.findFirst({
+    prisma.medicalExam.findFirst({
       where: { patientId },
       orderBy: [{ examDate: "desc" }, { createdAt: "desc" }],
       include: {
