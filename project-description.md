@@ -1,7 +1,7 @@
 <h1 align="center">MediTrack: Platanus Hack Project</h1>
 
 <p align="center">
-  <img src="meditrack-project-logo.png" width="200"/>
+  <img src="project-logo.png" width="200"/>
 </p>
 
 <p align="center">
